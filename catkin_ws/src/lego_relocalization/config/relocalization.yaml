@@ -1,0 +1,29 @@
+# NDT+ICP 3D Relocalization Parameters
+# Reference: T1_ws/src/lio_sam_relocalization/src/globalLocalize.cpp
+
+# Map path
+pcd_map_path: "/home/hong/lego/map_results/finalCloud.pcd"
+
+# Topics
+lidar_topic: "/velodyne_points"
+initialpose_topic: "/initialpose"
+odom_topic: "/relocalization/odometry"
+
+# Frames
+map_frame: "map"
+lidar_frame: "base_link"
+
+# Voxel filter
+voxel_leaf_size: 0.4          # meters, downsample input cloud and global map
+
+# NDT coarse alignment
+ndt_resolution: 1.0           # meters, NDT voxel resolution
+ndt_epsilon: 0.01             # transformation convergence threshold
+
+# ICP fine alignment
+icp_max_corr_dist: 3.0        # meters, max correspondence distance
+icp_max_iterations: 100       # max iterations
+icp_fitness_threshold: 0.5    # fitness score threshold for success
+
+# Processing
+processing_rate: 10.0         # Hz, main loop rate

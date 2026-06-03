@@ -1,0 +1,106 @@
+<launch>
+    <!-- 3D NDT+ICP Relocalization + Scan Context Auto-Init + RViz Visualization -->
+    
+    <arg name="pcd_map_path" default="/home/hong/lego/map_results/finalCloud.pcd"/>
+    <arg name="lidar_topic" default="/velodyne_points"/>
+    <arg name="use_sim_time" default="true"/>
+    <arg name="rviz" default="true"/>
+    <arg name="auto_init" default="true"/>
+    
+    <!-- Initial Pose Settings -->
+    <!-- If use_default_initial_pose=true and no /initialpose received within timeout,
+         the node will automatically use (default_init_x, default_init_y, default_init_z, default_init_yaw)
+         as the initial guess. Set to false to wait indefinitely for manual/SC input. -->
+    <arg name="use_default_initial_pose" default="false"/>
+    <arg name="default_init_x" default="0.0"/>
+    <arg name="default_init_y" default="0.0"/>
+    <arg name="default_init_z" default="0.0"/>
+    <arg name="default_init_yaw" default="0.0"/>
+    <arg name="default_init_timeout" default="5.0"/>
+    
+    <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+    
+    <!-- Adapter: rslidar -> velodyne_points -->
+    <node pkg="lego_loam_adapter" type="rslidar_filter_node.py" name="rslidar_filter_node" output="screen"/>
+    
+    <!-- 
+      TF Tree (matching LeGO-LOAM coordinate system):
+        map -> camera_init  (dynamic, published by ndt_icp_relocalize, this is the relocalized pose)
+        camera_init -> camera  (static identity, adapter outputs velodyne_points in camera_init frame)
+        camera -> base_link  (static identity)
+      Full chain: map -> camera_init -> camera -> base_link
+    -->
+    <node pkg="tf" type="static_transform_publisher" name="camera_to_camera_init" 
+          args="0 0 0 0 0 0 camera_init camera 10"/>
+    
+    <node pkg="tf" type="static_transform_publisher" name="base_link_to_camera" 
+          args="0 0 0 0 0 0 camera base_link 10"/>
+    
+    <!-- Scan Context Auto-Initializer (publishes /initialpose automatically) -->
+    <node pkg="lego_relocalization" type="scan_context_initializer.py" name="scan_context_initializer" output="screen" if="$(arg auto_init)">
+        <param name="pcd_map_path" value="$(arg pcd_map_path)"/>
+        <param name="db_path" value="/home/hong/lego/map_results/scancontext_db.npz"/>
+        <param name="lidar_topic" value="$(arg lidar_topic)"/>
+        <param name="initialpose_topic" value="/initialpose"/>
+        <param name="map_frame" value="map"/>
+        <param name="sc_num_rings" value="20"/>
+        <param name="sc_num_sectors" value="60"/>
+        <param name="sc_max_len" value="80.0"/>
+        <param name="grid_res" value="5.0"/>
+        <param name="local_radius" value="30.0"/>
+        <param name="query_k" value="5"/>
+        <param name="min_points" value="500"/>
+        <param name="publish_rate" value="2.0"/>
+        <param name="cooldown_sec" value="3.0"/>
+        <param name="max_sc_distance" value="600.0"/>
+        <param name="tracking_timeout" value="2.0"/>
+    </node>
+    
+    <!-- NDT+ICP Relocalization Node -->
+    <node pkg="lego_relocalization" type="ndt_icp_relocalize" name="ndt_icp_relocalize" output="screen">
+        <!-- Core paths and topics -->
+        <param name="pcd_map_path" value="$(arg pcd_map_path)"/>
+        <param name="lidar_topic" value="$(arg lidar_topic)"/>
+        <param name="initialpose_topic" value="/initialpose"/>
+        <param name="map_frame" value="map"/>
+        <param name="lidar_frame" value="camera_init"/>
+        <param name="odom_topic" value="/relocalization/odometry"/>
+        
+        <!-- Voxel filter -->
+        <param name="voxel_leaf_size" value="0.4"/>
+        
+        <!-- NDT coarse alignment -->
+        <param name="ndt_resolution" value="1.0"/>
+        <param name="ndt_epsilon" value="0.01"/>
+        
+        <!-- ICP fine alignment -->
+        <param name="icp_max_corr_dist" value="30.0"/>
+        <param name="icp_max_iterations" value="100"/>
+        <param name="icp_fitness_threshold" value="20.0"/>
+        
+        <!-- Main loop rate -->
+        <param name="processing_rate" value="10.0"/>
+        
+        <!-- Tracking ICP -->
+        <param name="tracking_icp_max_iter" value="20"/>
+        <param name="tracking_icp_max_corr_dist" value="5.0"/>
+        <param name="tracking_fitness_mult" value="10.0"/>
+        
+        <!-- Auto recovery -->
+        <param name="auto_reinit_max_lost" value="5"/>
+        <param name="auto_reinit_radius" value="20.0"/>
+        <param name="max_tracking_jump" value="10.0"/>
+        <param name="reinit_fitness_threshold" value="25.0"/>
+        
+        <!-- Default initial pose (used when no manual/SC input within timeout) -->
+        <param name="use_default_initial_pose" value="$(arg use_default_initial_pose)"/>
+        <param name="default_init_x" value="$(arg default_init_x)"/>
+        <param name="default_init_y" value="$(arg default_init_y)"/>
+        <param name="default_init_z" value="$(arg default_init_z)"/>
+        <param name="default_init_yaw" value="$(arg default_init_yaw)"/>
+        <param name="default_init_timeout" value="$(arg default_init_timeout)"/>
+    </node>
+    
+    <!-- RViz -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find lego_relocalization)/launch/relocalization.rviz" if="$(arg rviz)"/>
+</launch>

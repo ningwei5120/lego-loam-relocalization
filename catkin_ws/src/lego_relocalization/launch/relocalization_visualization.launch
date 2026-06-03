@@ -1,0 +1,57 @@
+<launch>
+    <!-- 三维地图重定位 + 可视化 launch -->
+    
+    <arg name="pcd_map_path" default="/home/hong/lego/map_results/finalCloud.pcd"/>
+    <arg name="lidar_topic" default="/velodyne_points"/>
+    <arg name="bag_file" default="/home/hong/lego/nky260525_2026-05-25-16-10-59.bag"/>
+    <arg name="bag_rate" default="1.0"/>
+    <arg name="use_sim_time" default="true"/>
+    <arg name="rviz" default="true"/>
+    <arg name="init_x" default="0.0"/>
+    <arg name="init_y" default="0.0"/>
+    <arg name="init_z" default="0.0"/>
+    <arg name="init_yaw" default="0.0"/>
+    
+    <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+    
+    <!-- Adapter: rslidar -> velodyne_points -->
+    <node pkg="lego_loam_adapter" type="rslidar_filter_node.py" name="rslidar_filter_node" output="screen"/>
+    
+    <!-- map -> camera_init: initial identity (will be overridden by relocalization node once tracking starts) -->
+    <node pkg="tf" type="static_transform_publisher" name="camera_init_to_map" 
+          args="0 0 0 0 0 0 map camera_init 10"/>
+    
+    <!-- NDT+ICP Relocalization Node -->
+    <node pkg="lego_relocalization" type="ndt_icp_relocalize" name="ndt_icp_relocalize" output="screen">
+        <param name="pcd_map_path" value="$(arg pcd_map_path)"/>
+        <param name="lidar_topic" value="$(arg lidar_topic)"/>
+        <param name="initialpose_topic" value="/initialpose"/>
+        <param name="map_frame" value="map"/>
+        <param name="lidar_frame" value="camera_init"/>
+        <param name="odom_topic" value="/relocalization/odometry"/>
+        <param name="voxel_leaf_size" value="0.2"/>
+        <param name="ndt_resolution" value="1.0"/>
+        <param name="ndt_epsilon" value="0.01"/>
+        <param name="icp_max_corr_dist" value="30.0"/>
+        <param name="icp_max_iterations" value="100"/>
+        <param name="icp_fitness_threshold" value="5.0"/>
+        <param name="processing_rate" value="10.0"/>
+    </node>
+    
+    <!-- RViz -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find lego_relocalization)/launch/relocalization.rviz" if="$(arg rviz)"/>
+    
+    <!-- Optional: publish initial pose automatically -->
+    <node pkg="rostopic" type="rostopic" name="publish_initialpose"
+          args="pub -1 /initialpose geometry_msgs/PoseWithCovarianceStamped 
+          '{header: {frame_id: map}, 
+            pose: {pose: {position: {x: $(arg init_x), y: $(arg init_y), z: $(arg init_z)}, 
+                          orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}, 
+                   covariance: [0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0.0685, 0, 0, 0, 0, 0, 0, 0.0685, 0, 0, 0, 0, 0, 0, 0.0685]}}'"
+          if="false"/>
+    
+    <!-- Optional: play bag file automatically -->
+    <node pkg="rosbag" type="play" name="rosbag_play"
+          args="$(arg bag_file) --clock -r $(arg bag_rate)"
+          if="false"/>
+</launch>

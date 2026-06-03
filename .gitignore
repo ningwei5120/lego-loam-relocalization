@@ -1,0 +1,38 @@
+# Build artifacts
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/logs/
+catkin_ws/.catkin_workspace
+catkin_ws/.catkin_tools/
+catkin_ws/src/CMakeLists.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# ROS logs
+*.log
+rosout.log
+
+# Data files (large, do not commit)
+*.bag
+*.pcd
+*.npz
+map_results/
+relocalization_results/
+
+# Archives
+*.tar.gz
+*.zip
+*.7z
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
