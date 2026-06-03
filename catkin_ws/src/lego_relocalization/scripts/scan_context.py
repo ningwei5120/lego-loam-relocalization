@@ -255,6 +255,221 @@ def build_database_from_pcd(pcd_path, grid_res=5.0, local_radius=30.0,
     return sc_manager
 
 
+# ------------------------------------------------------------------
+# Scan Context++ (TRO 2022) enhancements
+# ------------------------------------------------------------------
+
+class ScanContextPlusPlusManager(ScanContextManager):
+    """
+    Scan Context++ enhanced place recognition.
+
+    Key improvements over Scan Context (IROS 2018):
+      1. Lateral Augmentation: query point cloud is shifted laterally
+         (±2m, ±4m) to handle revisit with lane-level offset.
+      2. L0-norm Ring Key: counts non-zero bins per ring instead of mean,
+         more robust to height variations.
+      3. Noise filtering: bins with fewer than min_points_per_bin are
+         set to zero, reducing sparse-noise sensitivity.
+
+    Reference:
+      Kim, Choi & Kim, "Scan Context++: Structural Place Recognition
+      Robust to Rotation and Lateral Variations in Urban Environments",
+      IEEE T-RO, 2021.
+    """
+
+    # Lateral shift offsets (meters) for augmentation
+    # [0, -2, +2, -4, +4]  -- 5 neighbors including original
+    LATERAL_SHIFTS = np.array([0.0, -2.0, 2.0, -4.0, 4.0])
+    # For Cartesian coordinate: shift in y (lateral) direction
+    # For Polar coordinate: we shift in x-y plane; the augmentation
+    # works by moving the query cloud relative to the database.
+
+    def __init__(self, num_rings=20, num_sectors=60, max_len=80.0,
+                 z_min=-5.0, z_max=15.0,
+                 min_points_per_bin=5,
+                 use_l0_ringkey=True,
+                 use_augmentation=True):
+        super().__init__(num_rings, num_sectors, max_len, z_min, z_max)
+        self.min_points_per_bin = min_points_per_bin
+        self.use_l0_ringkey = use_l0_ringkey
+        self.use_augmentation = use_augmentation
+
+    # ------------------------------------------------------------------
+    # Descriptor generation with noise filtering
+    # ------------------------------------------------------------------
+    def make_scancontext(self, pts_xyz):
+        """
+        Generate descriptor with per-bin point count filtering.
+        Bins with fewer than min_points_per_bin are set to 0.
+        """
+        desc = np.zeros((self.num_rings, self.num_sectors), dtype=np.float32)
+        # Count points per bin for noise filtering
+        bin_counts = np.zeros((self.num_rings, self.num_sectors), dtype=np.int32)
+
+        x = pts_xyz[:, 0]
+        y = pts_xyz[:, 1]
+        z = pts_xyz[:, 2]
+
+        r = np.sqrt(x ** 2 + y ** 2)
+        theta = np.arctan2(y, x)
+
+        valid = (r < self.max_len) & (z > self.z_min) & (z < self.z_max)
+        r = r[valid]
+        theta = theta[valid]
+        z = z[valid]
+
+        if len(r) == 0:
+            return desc
+
+        ring_idx = np.floor(r / self.ring_gap).astype(np.int32)
+        ring_idx = np.clip(ring_idx, 0, self.num_rings - 1)
+
+        theta_shifted = theta + np.pi
+        sector_idx = np.floor(theta_shifted / self.sector_gap).astype(np.int32)
+        sector_idx = np.clip(sector_idx, 0, self.num_sectors - 1)
+
+        # First pass: count points and track max height
+        for i in range(len(r)):
+            ri, si = ring_idx[i], sector_idx[i]
+            bin_counts[ri, si] += 1
+            if z[i] > desc[ri, si]:
+                desc[ri, si] = z[i]
+
+        # Second pass: filter noisy bins
+        noisy_mask = bin_counts < self.min_points_per_bin
+        desc[noisy_mask] = 0.0
+
+        return desc
+
+    @staticmethod
+    def make_ringkey_l0(desc):
+        """
+        L0-norm ring key: count non-zero bins per ring.
+        More robust than L1 mean when height varies significantly.
+        """
+        return np.count_nonzero(desc, axis=1).astype(np.float32)
+
+    def add_place(self, pts_xyz, pose_xyyaw):
+        """Override to use L0 ring key if enabled."""
+        desc = self.make_scancontext(pts_xyz)
+        if self.use_l0_ringkey:
+            rk = self.make_ringkey_l0(desc)
+        else:
+            rk = self.make_ringkey(desc)
+        self.descriptors.append(desc)
+        self.ringkeys.append(rk)
+        self.poses.append(pose_xyyaw)
+
+    def build_kdtree(self):
+        """Build KD-tree on ringkeys."""
+        if len(self.ringkeys) == 0:
+            raise ValueError("Database is empty")
+        X = np.stack(self.ringkeys, axis=0)
+        self.kdtree = KDTree(X, leaf_size=10)
+
+    # ------------------------------------------------------------------
+    # Query with Lateral Augmentation
+    # ------------------------------------------------------------------
+    def query(self, pts_xyz, k=5):
+        """
+        Query with optional lateral augmentation.
+
+        If use_augmentation=True, the query cloud is shifted laterally
+        by multiple offsets. Each shifted version queries the KD-tree,
+        and results are merged and deduplicated before pairwise comparison.
+
+        This handles revisit scenarios where the vehicle is in a
+        different lane (lateral offset) from the database location.
+        """
+        if self.kdtree is None:
+            raise ValueError("KD-tree not built. Call build_kdtree() first.")
+
+        # Generate query descriptors (original + augmented)
+        query_descs = []
+        query_rks = []
+        shift_labels = []  # for debug: which lateral shift each query uses
+
+        if self.use_augmentation:
+            for dy in self.LATERAL_SHIFTS:
+                shifted_pts = pts_xyz.copy()
+                shifted_pts[:, 1] += dy  # shift in y (lateral)
+                q_desc = self.make_scancontext(shifted_pts)
+                query_descs.append(q_desc)
+                if self.use_l0_ringkey:
+                    query_rks.append(self.make_ringkey_l0(q_desc))
+                else:
+                    query_rks.append(self.make_ringkey(q_desc))
+                shift_labels.append(dy)
+        else:
+            q_desc = self.make_scancontext(pts_xyz)
+            query_descs.append(q_desc)
+            if self.use_l0_ringkey:
+                query_rks.append(self.make_ringkey_l0(q_desc))
+            else:
+                query_rks.append(self.make_ringkey(q_desc))
+            shift_labels.append(0.0)
+
+        # Stage 1: KD-tree candidate proposal for ALL augmented queries
+        all_candidates = set()
+        candidate_dists = {}
+        for q_rk, label in zip(query_rks, shift_labels):
+            q_rk_2d = q_rk.reshape(1, -1)
+            dists, indices = self.kdtree.query(q_rk_2d, k=min(k, len(self.ringkeys)))
+            dists = dists.flatten()
+            indices = indices.flatten()
+            for idx, dist in zip(indices, dists):
+                idx = int(idx)
+                if idx not in candidate_dists or dist < candidate_dists[idx]:
+                    candidate_dists[idx] = dist
+                all_candidates.add(idx)
+
+        # Stage 2: Pairwise comparison for each candidate against
+        # ALL augmented query descriptors. Keep the best match.
+        results = []
+        for idx in all_candidates:
+            c_desc = self.descriptors[idx]
+            best_dist = float('inf')
+            best_shift = 0
+            best_aug_label = 0.0
+            for q_desc, label in zip(query_descs, shift_labels):
+                dist, shift = self.distance(q_desc, c_desc)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_shift = shift
+                    best_aug_label = label
+            results.append((best_dist, best_shift, self.poses[idx], best_aug_label))
+
+        results.sort(key=lambda x: x[0])
+        # Return format compatible with original: (dist, shift, pose)
+        # Strip augmentation label for backward compatibility
+        return [(r[0], r[1], r[2]) for r in results[:k]]
+
+    def save_database(self, path):
+        """Save database with SC++ flag for load-time type reconstruction."""
+        np.savez(path,
+                 descriptors=np.stack(self.descriptors, axis=0),
+                 ringkeys=np.stack(self.ringkeys, axis=0),
+                 poses=np.array(self.poses),
+                 sc_plus_plus=True,
+                 min_points_per_bin=self.min_points_per_bin,
+                 use_l0_ringkey=self.use_l0_ringkey,
+                 use_augmentation=self.use_augmentation)
+
+    def load_database(self, path):
+        """Load database from npz file."""
+        data = np.load(path)
+        self.descriptors = list(data['descriptors'])
+        self.ringkeys = list(data['ringkeys'])
+        self.poses = list(data['poses'])
+        # Restore SC++ params if present
+        if 'sc_plus_plus' in data:
+            self.min_points_per_bin = int(data.get('min_points_per_bin', 5))
+            self.use_l0_ringkey = bool(data.get('use_l0_ringkey', True))
+            self.use_augmentation = bool(data.get('use_augmentation', True))
+        self.build_kdtree()
+
+
 if __name__ == "__main__":
     # Simple test
-    print("Scan Context module loaded. Run as ROS node via scan_context_initializer.py")
+    print("Scan Context / Scan Context++ module loaded.")
+    print("Run as ROS node via scan_context_initializer.py")

@@ -27,6 +27,13 @@ relocalization_results/
 *.zip
 *.7z
 
+# Generated deploy package
+lego_loam_mapping_pkg/
+
+# Trajectory outputs
+relocalization_trajectory.csv
+relocalization_trajectory.png
+
 # IDE
 .vscode/
 .idea/

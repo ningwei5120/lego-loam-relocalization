@@ -6,6 +6,7 @@
     <arg name="use_sim_time" default="true"/>
     <arg name="rviz" default="true"/>
     <arg name="auto_init" default="true"/>
+    <arg name="use_sc_plus_plus" default="false"/>
     
     <!-- Initial Pose Settings -->
     <!-- If use_default_initial_pose=true and no /initialpose received within timeout,
@@ -54,6 +55,7 @@
         <param name="cooldown_sec" value="3.0"/>
         <param name="max_sc_distance" value="600.0"/>
         <param name="tracking_timeout" value="2.0"/>
+        <param name="use_sc_plus_plus" value="$(arg use_sc_plus_plus)"/>
     </node>
     
     <!-- NDT+ICP Relocalization Node -->

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2025-06-03
+
+### Added
+- **Scan Context++ support** (`--sc-plus-plus`)
+  - Lateral Augmentation: query cloud shifted ±2m/±4m for lane-level offset robustness
+  - L0-norm Ring Key: counts non-zero bins per ring (robust to height variations)
+  - Noise filtering: bins with < 5 points set to zero
+  - Backward compatible: original Scan Context remains default
+- `use_sc_plus_plus` parameter in launch file and initializer node
+
 ## [3.1.0] - 2025-06-03
 
 ### Added

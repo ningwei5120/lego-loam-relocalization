@@ -21,6 +21,7 @@ DEFAULT_INIT_X="0.0"
 DEFAULT_INIT_Y="0.0"
 DEFAULT_INIT_Z="0.0"
 DEFAULT_INIT_YAW="0.0"
+USE_SC_PLUS_PLUS="false"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -67,13 +68,22 @@ while [[ $# -gt 0 ]]; do
             AUTO_INIT="false"
             shift
             ;;
+        --sc-plus-plus)
+            # Enable Scan Context++ (L0 ringkey + lateral augmentation)
+            USE_SC_PLUS_PLUS="true"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             echo "Usage: $0 [--rate 1.0] [--no-auto-init] [--rviz|--no-rviz]"
-            echo "       [--default-origin] [--from-origin] [--init-x 0.0] [--init-y 0.0] [--init-z 0.0] [--init-yaw 0.0]"
+            echo "       [--default-origin] [--from-origin] [--sc-plus-plus]"
+            echo "       [--init-x 0.0] [--init-y 0.0] [--init-z 0.0] [--init-yaw 0.0]"
             echo ""
             echo "Quick start for this dataset (origin=start point):"
             echo "  $0 --from-origin          # fastest, 100% success"
+            echo ""
+            echo "Advanced:"
+            echo "  $0 --sc-plus-plus         # Use Scan Context++ for lateral-robust init"
             exit 1
             ;;
     esac
@@ -129,6 +139,7 @@ roslaunch lego_relocalization relocalization.launch \
     default_init_y:="$DEFAULT_INIT_Y" \
     default_init_z:="$DEFAULT_INIT_Z" \
     default_init_yaw:="$DEFAULT_INIT_YAW" \
+    use_sc_plus_plus:="$USE_SC_PLUS_PLUS" \
     > /tmp/relocalize.log 2>&1 &
 LAUNCH_PID=$!
 sleep 10

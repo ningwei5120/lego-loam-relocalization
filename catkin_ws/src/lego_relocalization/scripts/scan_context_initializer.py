@@ -18,7 +18,7 @@ from std_msgs.msg import Header
 import struct
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scan_context import ScanContextManager, build_database_from_pcd
+from scan_context import ScanContextManager, ScanContextPlusPlusManager, build_database_from_pcd
 
 
 def swap_pose_xyz(x_orig, y_orig, z_orig):
@@ -54,6 +54,9 @@ class ScanContextInitializer:
         self.max_sc_distance = rospy.get_param('~max_sc_distance', 600.0)
         self.tracking_timeout = rospy.get_param('~tracking_timeout', 2.0)
 
+        # Scan Context++ switch
+        self.use_sc_plus_plus = rospy.get_param('~use_sc_plus_plus', False)
+
         self.latest_cloud = None
         self.last_publish_time = rospy.Time(0)
         self.last_odom_time = rospy.Time(0)
@@ -71,14 +74,30 @@ class ScanContextInitializer:
 
         rospy.loginfo("[SC-Initializer] Ready. Will auto-publish /initialpose when needed.")
 
-    def _init_database(self):
-        if os.path.exists(self.db_path):
-            rospy.loginfo(f"[SC-Initializer] Loading DB: {self.db_path}")
-            self.sc_manager = ScanContextManager(
+    def _create_manager(self):
+        """Create SC or SC++ manager based on parameter."""
+        if self.use_sc_plus_plus:
+            rospy.loginfo("[SC-Initializer] Using Scan Context++ (L0 ringkey + lateral augmentation)")
+            return ScanContextPlusPlusManager(
+                num_rings=self.sc_num_rings,
+                num_sectors=self.sc_num_sectors,
+                max_len=self.sc_max_len,
+                min_points_per_bin=5,
+                use_l0_ringkey=True,
+                use_augmentation=True
+            )
+        else:
+            rospy.loginfo("[SC-Initializer] Using Scan Context (original)")
+            return ScanContextManager(
                 num_rings=self.sc_num_rings,
                 num_sectors=self.sc_num_sectors,
                 max_len=self.sc_max_len
             )
+
+    def _init_database(self):
+        if os.path.exists(self.db_path):
+            rospy.loginfo(f"[SC-Initializer] Loading DB: {self.db_path}")
+            self.sc_manager = self._create_manager()
             self.sc_manager.load_database(self.db_path)
             rospy.loginfo(f"[SC-Initializer] Loaded {len(self.sc_manager.poses)} places")
         else:
@@ -87,11 +106,7 @@ class ScanContextInitializer:
                 self.pcd_map_path,
                 grid_res=self.grid_res,
                 local_radius=self.local_radius,
-                sc_manager=ScanContextManager(
-                    num_rings=self.sc_num_rings,
-                    num_sectors=self.sc_num_sectors,
-                    max_len=self.sc_max_len
-                ),
+                sc_manager=self._create_manager(),
                 min_points=self.min_points
             )
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
